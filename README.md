@@ -1,4 +1,4 @@
-﻿# LoopPad
+# LoopPad
 
 **LoopPad** is an experimental open-source fixed-length live looper for the **Akai MPC Sample**.
 
@@ -203,9 +203,26 @@ LoopPad is experimental software that runs directly on the MPC Sample hardware. 
 LoopPad was created by **Lars Öholm** ([github.com/larsoholm](https://github.com/larsoholm)).
 
 Contributions are welcome through GitHub issues and pull requests.
+
 ## License
 
-A project license will be added after the licenses and distribution requirements of incorporated dependencies have been reviewed. Do not assume that this repository grants rights to redistribute Akai firmware, Akai software, or third-party components.
+LoopPad's original source code is licensed under the **MIT License**.
+
+Copyright (c) 2026 Lars Öholm.
+
+See [LICENSE](LICENSE) for the full license terms.
+
+LoopPad uses and depends on third-party software that is covered by separate license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
+
+### Binary releases
+
+Precompiled LoopPad binaries are not currently provided as public releases.
+
+LoopPad is statically built with third-party components, including `mpc-ui-toolkit`. The version of `mpc-ui-toolkit` currently used for LoopPad does not include an explicit license covering the toolkit's own source code.
+
+Until redistribution rights for `mpc-ui-toolkit` are clarified, LoopPad will be distributed as source code only. Developers can obtain the required dependencies separately and build LoopPad by following [BUILDING.md](BUILDING.md).
+
+TinyALSA is distributed under its own permissive license terms. Required third-party copyright notices and redistribution conditions are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgements
 
@@ -216,4 +233,3 @@ LoopPad builds on community work around the MPC Sample, particularly:
 - TinyALSA
 
 Thanks to the MPC Sample community for documenting and exploring the platform.
-
