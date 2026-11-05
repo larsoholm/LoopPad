@@ -1,0 +1,67 @@
+﻿# LoopPad compiled binaries
+looppad
+looppad-v*
+*.exe
+*.o
+*.obj
+
+# Build output
+build/
+bin/
+out/
+dist/
+
+# Local dependency checkouts
+tinyalsa/
+mpc-ui-toolkit/
+mpc-boot-thingy/
+
+# Development snapshots / backups
+*_WORKING.c
+*_WORKING
+*_backup.c
+*_backup
+*backup*
+patch_looppad_*.py
+fix_looppad_*.py
+mixdump
+mixdump.c
+
+# SSH keys / credentials / personalized MPC access
+.ssh/
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+mpc_sample_client_ed25519
+mpc_sample_client_ed25519.pub
+authorized_keys
+ssh_host_*
+autorun/
+autoboot/
+
+# Secrets / environment
+.env
+.env.*
+*.secret
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+~$*
