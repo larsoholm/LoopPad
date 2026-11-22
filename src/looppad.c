@@ -252,6 +252,7 @@ static void draw_clip_wave(struct ui *u,struct clip *c,int x,int y,int w,int h,u
 /* v0.6.2 Settings UI. Audio/transport processing is intentionally untouched. */
 static int g_settings_open=0;
 static int g_settings_row=0;
+static int g_settings_edit=0;
 static char g_settings_status[48]="";
 static int g_settings_status_ticks=0;
 
@@ -323,13 +324,16 @@ static void draw_settings_page(struct ui *u,const struct input *in){
         else if(i==5)snprintf(value,sizeof value,"%d%%",(atomic_load(&g_click_volume)*100+63)/127);
         else snprintf(value,sizeof value,"%s",LOOPPAD_VERSION);
         int x=296-(int)strlen(value)*6;
+        if(i==g_settings_row && g_settings_edit){
+            ui_box(u,x-5,y+2,(int)strlen(value)*6+10,16,(struct ui_paint){.fill_set=1,.fill=0x164e63,.border_set=1,.border=0x67e8f9,.border_px=1});
+        }
         ui_text(u,x,y+4,value,0xf8fafc,1);
     }
     if(g_settings_status_ticks>0){
         ui_box(u,56,202,208,18,(struct ui_paint){.fill_set=1,.fill=0x450a0a,.border_set=1,.border=0xef4444,.border_px=1});
         ui_text(u,74,205,g_settings_status,0xfca5a5,1);
     }
-    ui_text(u,15,226,"B1 BACK   ENCODER SELECT   +/- CHANGE",0x94a3b8,1);
+    ui_text(u,15,226,g_settings_edit?"B1 CANCEL   ENCODER CHANGE / PRESS DONE":"B1 BACK   ENCODER SELECT / PRESS EDIT",0x94a3b8,1);
     (void)in;
 }
 
@@ -356,8 +360,24 @@ static int frame(struct ui *u,const struct input *in,void *x){
     }
     if(g_settings_open){
         if(in){
-            if(input_down(in,IN_B1)){g_settings_open=0;return 0;}
-            if(in->encoder){g_settings_row+=in->encoder;if(g_settings_row<0)g_settings_row=0;if(g_settings_row>6)g_settings_row=6;}
+            if(input_down(in,IN_B1)){
+                if(g_settings_edit) g_settings_edit=0;
+                else {g_settings_open=0;return 0;}
+            }
+            if(input_down(in,IN_ENCODER)){
+                if(g_settings_row<6) g_settings_edit=!g_settings_edit;
+            }
+            if(in->encoder){
+                if(g_settings_edit){
+                    int step=in->encoder>0?1:-1;
+                    int n=in->encoder>0?in->encoder:-in->encoder;
+                    while(n--) settings_change(step);
+                } else {
+                    g_settings_row+=in->encoder;
+                    if(g_settings_row<0)g_settings_row=0;if(g_settings_row>6)g_settings_row=6;
+                }
+            }
+            /* Keep +/- as an optional shortcut. */
             if(input_down(in,IN_PLUS))settings_change(1);
             if(input_down(in,IN_MINUS))settings_change(-1);
         }
