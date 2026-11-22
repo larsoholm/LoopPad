@@ -57,6 +57,7 @@ static _Atomic int g_cmd=0, g_bpm=90, g_metro=1, g_transport=1;
 static _Atomic int g_click_volume=90; /* SHIFT+K1, 0..127 */
 static _Atomic int g_running=1, g_xruns=0, g_volume=32, g_input=0;
 static _Atomic int g_active_clips=4; /* 4 or 8; PAD BANK toggles in SETUP */
+static _Atomic int g_default_bars=1;  /* default for newly enabled EMPTY loop slots */
 static _Atomic int g_peak_l=0, g_peak_r=0;
 static _Atomic uint64_t g_clock=0;
 static _Atomic uint64_t g_audio_frames=0; /* frames processed since audio thread start */
@@ -253,6 +254,7 @@ static void draw_clip_wave(struct ui *u,struct clip *c,int x,int y,int w,int h,u
 static int g_settings_open=0;
 static int g_settings_row=0;
 static int g_settings_edit=0;
+static int g_about_open=0;
 static char g_settings_status[48]="";
 static int g_settings_status_ticks=0;
 
@@ -269,7 +271,7 @@ static void settings_change(int dir){
     switch(g_settings_row){
         case 0: {
             int n=atomic_load(&g_active_clips);
-            if(dir>0) atomic_store(&g_active_clips,8);
+            if(dir>0){ int def=atomic_load(&g_default_bars); for(int q=4;q<8;q++) if(atomic_load(&clips[q].state)==EMPTY && atomic_load(&clips[q].len)==0) atomic_store(&clips[q].bars,def); atomic_store(&g_active_clips,8); }
             else if(n==8){
                 if(settings_hidden_clips_empty()) atomic_store(&g_active_clips,4);
                 else {snprintf(g_settings_status,sizeof g_settings_status,"CLEAR P5-P8 FIRST");g_settings_status_ticks=60;}
@@ -299,18 +301,38 @@ static void settings_change(int dir){
             if(v<0)v=0;if(v>127)v=127;
             atomic_store(&g_click_volume,v);
         } break;
+        case 6: {
+            int v=atomic_load(&g_default_bars)+dir;
+            if(v<1)v=1;if(v>8)v=8;
+            atomic_store(&g_default_bars,v);
+        } break;
         default: break;
     }
 }
 
+static void draw_about_page(struct ui *u){
+    ui_clear(u,0x0b1018);
+    ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
+    ui_text(u,124,8,"ABOUT",0xffffff,1);
+    ui_text(u,115,48,"LOOPPAD",0x67e8f9,2);
+    ui_text(u,121,76,LOOPPAD_VERSION,0xf8fafc,1);
+    ui_text(u,76,104,"MPC SAMPLE LIVE LOOPER",0xcbd5e1,1);
+    ui_text(u,62,132,"ENGINE     8 CLIPS",0x94a3b8,1);
+    ui_text(u,62,147,"AUDIO      44.1K / S32",0x94a3b8,1);
+    ui_text(u,62,162,"TOOLKIT    0c162ff",0x94a3b8,1);
+    ui_text(u,62,177,"LOOPPAD    MIT",0x94a3b8,1);
+    ui_text(u,62,192,"UI TOOLKIT CC0-1.0",0x94a3b8,1);
+    ui_text(u,15,226,"B1 BACK",0x94a3b8,1);
+}
+
 static void draw_settings_page(struct ui *u,const struct input *in){
-    static const char *names[]={"LOOP LAYOUT","BPM","QUANTIZE","COUNT-IN","INPUT","CLICK LEVEL","ABOUT"};
+    static const char *names[]={"LOOP LAYOUT","BPM","QUANTIZE","COUNT-IN","INPUT","CLICK LEVEL","DEFAULT BARS","ABOUT"};
     char value[48];
     ui_clear(u,0x0b1018);
     ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
     ui_text(u,84,8,"LOOPPAD SETTINGS",0xffffff,1);
-    for(int i=0;i<7;i++){
-        int y=38+i*23;
+    for(int i=0;i<8;i++){
+        int y=34+i*21;
         uint32_t fill=i==g_settings_row?0x183b56:0x111827;
         uint32_t border=i==g_settings_row?0x22d3ee:0x263244;
         ui_box(u,16,y,288,20,(struct ui_paint){.fill_set=1,.fill=fill,.border_set=1,.border=border,.border_px=i==g_settings_row?2:1});
@@ -322,7 +344,8 @@ static void draw_settings_page(struct ui *u,const struct input *in){
         else if(i==3){int ci=atomic_load(&g_countin);snprintf(value,sizeof value,"%s",ci==CI_NEXT?"NEXT":ci==CI_1BAR?"1BAR":"NOW");}
         else if(i==4)snprintf(value,sizeof value,"%s",atomic_load(&g_input)?"REAR":"MIC");
         else if(i==5)snprintf(value,sizeof value,"%d%%",(atomic_load(&g_click_volume)*100+63)/127);
-        else snprintf(value,sizeof value,"%s",LOOPPAD_VERSION);
+        else if(i==6)snprintf(value,sizeof value,"%dB",atomic_load(&g_default_bars));
+        else snprintf(value,sizeof value,">");
         int x=296-(int)strlen(value)*6;
         if(i==g_settings_row && g_settings_edit){
             ui_box(u,x-5,y+2,(int)strlen(value)*6+10,16,(struct ui_paint){.fill_set=1,.fill=0x164e63,.border_set=1,.border=0x67e8f9,.border_px=1});
@@ -359,13 +382,19 @@ static int frame(struct ui *u,const struct input *in,void *x){
         g_settings_status[0]='\0';g_settings_status_ticks=0;
     }
     if(g_settings_open){
+        if(g_about_open){
+            if(in && input_down(in,IN_B1))g_about_open=0;
+            draw_about_page(u);
+            return 0;
+        }
         if(in){
             if(input_down(in,IN_B1)){
                 if(g_settings_edit) g_settings_edit=0;
                 else {g_settings_open=0;return 0;}
             }
             if(input_down(in,IN_ENCODER)){
-                if(g_settings_row<6) g_settings_edit=!g_settings_edit;
+                if(g_settings_row==7){g_about_open=1;g_settings_edit=0;}
+                else g_settings_edit=!g_settings_edit;
             }
             if(in->encoder){
                 if(g_settings_edit){
@@ -374,7 +403,7 @@ static int frame(struct ui *u,const struct input *in,void *x){
                     while(n--) settings_change(step);
                 } else {
                     g_settings_row+=in->encoder;
-                    if(g_settings_row<0)g_settings_row=0;if(g_settings_row>6)g_settings_row=6;
+                    if(g_settings_row<0)g_settings_row=0;if(g_settings_row>7)g_settings_row=7;
                 }
             }
             /* Keep +/- as an optional shortcut. */
@@ -423,7 +452,7 @@ static int frame(struct ui *u,const struct input *in,void *x){
             } else if(any_recording()){
                 snprintf(layout_msg,sizeof layout_msg,"PLEASE WAIT - RECORDING"); layout_ticks=45;
             } else if(atomic_load(&g_active_clips)==4){
-                atomic_store(&g_active_clips,8); snprintf(layout_msg,sizeof layout_msg,"8 LOOP MODE - PADS 1-8"); layout_ticks=45;
+                int def=atomic_load(&g_default_bars); for(int q=4;q<8;q++) if(atomic_load(&clips[q].state)==EMPTY && atomic_load(&clips[q].len)==0) atomic_store(&clips[q].bars,def); atomic_store(&g_active_clips,8); snprintf(layout_msg,sizeof layout_msg,"8 LOOP MODE - PADS 1-8"); layout_ticks=45;
             } else {
                 char used[32]={0}; int first=1;
                 for(int q=4;q<8;q++) if(atomic_load(&clips[q].state)!=EMPTY || atomic_load(&clips[q].len)!=0){
