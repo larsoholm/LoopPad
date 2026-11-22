@@ -1,4 +1,4 @@
-/* LoopPad v0.6.1-alpha - selectable 4/8 loops + splash fixed-length loops for Akai MPC Sample */
+/* LoopPad v0.6.2-dev - Settings UI development fixed-length loops for Akai MPC Sample */
 #define _GNU_SOURCE
 #include <math.h>
 #include <pthread.h>
@@ -248,6 +248,91 @@ static void draw_clip_wave(struct ui *u,struct clip *c,int x,int y,int w,int h,u
     }
 }
 
+
+/* v0.6.2 Settings UI. Audio/transport processing is intentionally untouched. */
+static int g_settings_open=0;
+static int g_settings_row=0;
+static char g_settings_status[48]="";
+static int g_settings_status_ticks=0;
+
+static int settings_hidden_clips_empty(void){
+    for(int i=4;i<8;i++){
+        if(atomic_load(&clips[i].state)!=EMPTY || atomic_load(&clips[i].len)!=0) return 0;
+    }
+    return 1;
+}
+
+static void settings_change(int dir){
+    if(!dir) return;
+    g_settings_status[0]='\0';
+    switch(g_settings_row){
+        case 0: {
+            int n=atomic_load(&g_active_clips);
+            if(dir>0) atomic_store(&g_active_clips,8);
+            else if(n==8){
+                if(settings_hidden_clips_empty()) atomic_store(&g_active_clips,4);
+                else {snprintf(g_settings_status,sizeof g_settings_status,"CLEAR P5-P8 FIRST");g_settings_status_ticks=60;}
+            }
+        } break;
+        case 1: {
+            int bpm=atomic_load(&g_bpm)+dir;
+            if(bpm<40)bpm=40;if(bpm>240)bpm=240;
+            atomic_store(&g_bpm,bpm);
+        } break;
+        case 2: {
+            int q=atomic_load(&g_quant)+dir;
+            if(q<0)q=Q_OFF;if(q>Q_OFF)q=Q_BAR;
+            atomic_store(&g_quant,q);
+        } break;
+        case 3: {
+            int ci=atomic_load(&g_countin)+dir;
+            if(ci<0)ci=CI_NOW;if(ci>CI_NOW)ci=CI_NEXT;
+            atomic_store(&g_countin,ci);
+        } break;
+        case 4: {
+            int rear=dir>0?1:0;
+            if(rear!=atomic_load(&g_input) && setup_input_route(rear)==0) atomic_store(&g_input,rear);
+        } break;
+        case 5: {
+            int v=atomic_load(&g_click_volume)+dir*6;
+            if(v<0)v=0;if(v>127)v=127;
+            atomic_store(&g_click_volume,v);
+        } break;
+        default: break;
+    }
+}
+
+static void draw_settings_page(struct ui *u,const struct input *in){
+    static const char *names[]={"LOOP LAYOUT","BPM","QUANTIZE","COUNT-IN","INPUT","CLICK LEVEL","ABOUT"};
+    char value[48];
+    ui_clear(u,0x0b1018);
+    ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
+    ui_text(u,84,8,"LOOPPAD SETTINGS",0xffffff,1);
+    for(int i=0;i<7;i++){
+        int y=38+i*23;
+        uint32_t fill=i==g_settings_row?0x183b56:0x111827;
+        uint32_t border=i==g_settings_row?0x22d3ee:0x263244;
+        ui_box(u,16,y,288,20,(struct ui_paint){.fill_set=1,.fill=fill,.border_set=1,.border=border,.border_px=i==g_settings_row?2:1});
+        ui_text(u,24,y+4,names[i],i==g_settings_row?0x67e8f9:0xcbd5e1,1);
+        value[0]='\0';
+        if(i==0)snprintf(value,sizeof value,"%d LOOPS",atomic_load(&g_active_clips));
+        else if(i==1)snprintf(value,sizeof value,"%d",atomic_load(&g_bpm));
+        else if(i==2){int q=atomic_load(&g_quant);snprintf(value,sizeof value,"%s",q==Q_BAR?"BAR":q==Q_BEAT?"BEAT":"OFF");}
+        else if(i==3){int ci=atomic_load(&g_countin);snprintf(value,sizeof value,"%s",ci==CI_NEXT?"NEXT":ci==CI_1BAR?"1BAR":"NOW");}
+        else if(i==4)snprintf(value,sizeof value,"%s",atomic_load(&g_input)?"REAR":"MIC");
+        else if(i==5)snprintf(value,sizeof value,"%d%%",(atomic_load(&g_click_volume)*100+63)/127);
+        else snprintf(value,sizeof value,"%s",LOOPPAD_VERSION);
+        int x=296-(int)strlen(value)*6;
+        ui_text(u,x,y+4,value,0xf8fafc,1);
+    }
+    if(g_settings_status_ticks>0){
+        ui_box(u,56,202,208,18,(struct ui_paint){.fill_set=1,.fill=0x450a0a,.border_set=1,.border=0xef4444,.border_px=1});
+        ui_text(u,74,205,g_settings_status,0xfca5a5,1);
+    }
+    ui_text(u,15,226,"B1 BACK   ENCODER SELECT   +/- CHANGE",0x94a3b8,1);
+    (void)in;
+}
+
 static int frame(struct ui *u,const struct input *in,void *x){
     (void)x;
     static int splash_frames=0;
@@ -258,6 +343,21 @@ static int frame(struct ui *u,const struct input *in,void *x){
 
         /* Version is drawn dynamically; it is not baked into the PNG. */
         ui_text(u, 122, 218, LOOPPAD_VERSION, 0xb8c2cc, 1);
+        return 0;
+    }
+    if(in && in->shift && input_down(in,IN_SAMPLE_SELECT)){
+        g_settings_open=!g_settings_open;
+        g_settings_status[0]='\0';g_settings_status_ticks=0;
+    }
+    if(g_settings_open){
+        if(in){
+            if(input_down(in,IN_B1)){g_settings_open=0;return 0;}
+            if(in->encoder){g_settings_row+=in->encoder;if(g_settings_row<0)g_settings_row=0;if(g_settings_row>6)g_settings_row=6;}
+            if(input_down(in,IN_PLUS))settings_change(1);
+            if(input_down(in,IN_MINUS))settings_change(-1);
+        }
+        if(g_settings_status_ticks>0)g_settings_status_ticks--;
+        draw_settings_page(u,in);
         return 0;
     }
     example_menu_prepare();(void)ui_menu_open(&example_menu,in);
