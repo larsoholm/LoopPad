@@ -1,0 +1,8 @@
+#pragma once
+
+#define LOOPPAD_VERSION_MAJOR 0
+#define LOOPPAD_VERSION_MINOR 6
+#define LOOPPAD_VERSION_PATCH 1
+#define LOOPPAD_VERSION_LABEL "alpha"
+
+#define LOOPPAD_VERSION "v0.6.1-alpha"

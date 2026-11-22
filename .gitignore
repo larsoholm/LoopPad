@@ -1,4 +1,4 @@
-﻿# LoopPad compiled binaries
+# LoopPad compiled binaries
 looppad
 looppad-v*
 *.exe
@@ -65,3 +65,7 @@ desktop.ini
 *.bak
 *.swp
 ~$*
+
+
+# Generated splash data
+src/looppad_splash_data.h

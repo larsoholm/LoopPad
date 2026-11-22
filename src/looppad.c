@@ -1,4 +1,4 @@
-/* LoopPad v0.6.0 - selectable 4/8 loops fixed-length loops for Akai MPC Sample */
+/* LoopPad v0.6.1-alpha - selectable 4/8 loops + splash fixed-length loops for Akai MPC Sample */
 #define _GNU_SOURCE
 #include <math.h>
 #include <pthread.h>
@@ -15,6 +15,9 @@
 #include "input.h"
 #include "widgets.h"
 #include "menu.h"
+#include "image.h"
+#include "looppad_splash_data.h"
+#include "version.h"
 
 #define CH 2
 #define SR 44100
@@ -58,6 +61,8 @@ static _Atomic int g_peak_l=0, g_peak_r=0;
 static _Atomic uint64_t g_clock=0;
 static _Atomic uint64_t g_audio_frames=0; /* frames processed since audio thread start */
 static struct pcm *g_cap,*g_pb;
+static uint32_t *g_splash_px=NULL;
+static int g_splash_w=0,g_splash_h=0;
 static int click_left,click_hi;
 static float click_phase;
 
@@ -244,7 +249,18 @@ static void draw_clip_wave(struct ui *u,struct clip *c,int x,int y,int w,int h,u
 }
 
 static int frame(struct ui *u,const struct input *in,void *x){
-    (void)x;ui_wake(u,33);example_menu_prepare();(void)ui_menu_open(&example_menu,in);
+    (void)x;
+    static int splash_frames=0;
+    ui_wake(u,33);
+    if(g_splash_px && splash_frames<75){
+        splash_frames++;
+        memcpy(u->px,g_splash_px,(size_t)UI_W*UI_H*sizeof(uint32_t));
+
+        /* Version is drawn dynamically; it is not baked into the PNG. */
+        ui_text(u, 122, 218, LOOPPAD_VERSION, 0xb8c2cc, 1);
+        return 0;
+    }
+    example_menu_prepare();(void)ui_menu_open(&example_menu,in);
     static int selected=0;
     static int fader_latched=0;
     static int fader_last=-1;
@@ -365,7 +381,7 @@ static int frame(struct ui *u,const struct input *in,void *x){
         }
     }else{
         for(int i=0;i<8;i++){
-            int col=i%4,row=i/4,x0=5+col*79,y0=52+row*57,st=atomic_load(&clips[i].state);uint32_t c=state_color(st),border=(atomic_load(&g_mode)==MODE_SETUP&&i==selected&&st==EMPTY)?0x22d3ee:c;if(clear_pad==i)border=(clear_ticks&4)?0xef4444:0x7f1d1d;
+            int col=i%4,row=1-(i/4),x0=5+col*79,y0=52+row*57,st=atomic_load(&clips[i].state);uint32_t c=state_color(st),border=(atomic_load(&g_mode)==MODE_SETUP&&i==selected&&st==EMPTY)?0x22d3ee:c;if(clear_pad==i)border=(clear_ticks&4)?0xef4444:0x7f1d1d;
             ui_box(u,x0,y0,74,49,(struct ui_paint){.fill_set=1,.fill=i==selected?0x182235:0x111827,.border_set=1,.border=border,.border_px=i==selected?2:1});
             snprintf(b,sizeof b,"P%d %s",i+1,STATE_NAME[st]);ui_text(u,x0+3,y0+3,b,c,1);snprintf(b,sizeof b,"%dB %d%%",atomic_load(&clips[i].bars),(atomic_load(&clips[i].volume)*100+63)/127);ui_text(u,x0+3,y0+14,b,0xcbd5e1,1);
             if(atomic_load(&clips[i].wave_ready))draw_clip_wave(u,&clips[i],x0+3,y0+27,68,17,c,st);else if(st==ARMED){int n=arm_beats_left(&clips[i]);snprintf(b,sizeof b,"IN %d",n>0?n:1);ui_text(u,x0+24,y0+30,b,0xfbbf24,1);}
@@ -433,5 +449,10 @@ int main(void){
     if(setup_input_route(0)!=0)fprintf(stderr,"LoopPad: input route failed\n");
     g_cap=open_pcm(PCM_IN);if(!g_cap)return 2;g_pb=open_pcm(PCM_OUT);if(!g_pb)return 3;
     pthread_t th;if(pthread_create(&th,NULL,audio_thread,NULL)!=0)return 4;
-    int rc=app_run(frame,NULL);atomic_store(&g_running,0);pthread_join(th,NULL);pcm_close(g_cap);pcm_close(g_pb);for(int i=0;i<NCLIPS;i++)free(clips[i].audio);return rc;
+    uint32_t *raw=NULL;int rw=0,rh=0;
+    if(image_decode_mem(looppad_splash_png,(int)looppad_splash_png_len,&raw,&rw,&rh)==0){
+        if(rw==UI_W && rh==UI_H){g_splash_px=raw;g_splash_w=rw;g_splash_h=rh;}
+        else {g_splash_px=image_scale(raw,rw,rh,UI_W,UI_H);free(raw);if(g_splash_px){g_splash_w=UI_W;g_splash_h=UI_H;}}
+    }
+    int rc=app_run(frame,NULL);atomic_store(&g_running,0);pthread_join(th,NULL);pcm_close(g_cap);pcm_close(g_pb);free(g_splash_px);for(int i=0;i<NCLIPS;i++)free(clips[i].audio);return rc;
 }
