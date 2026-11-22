@@ -319,8 +319,8 @@ static void settings_change(int dir){
 
 
 #define SESSION_FORMAT_VERSION 1
-#define SESSION_DIR_NAME "LoopPad"
-#define SESSION_SUBDIR "Sessions"
+#define SESSION_DIR_NAME "MPC-Mods"
+#define SESSION_SUBDIR "LoopPad/Sessions"
 #define SESSION_NAME "Default"
 
 struct session_meta {
@@ -347,15 +347,22 @@ static int session_mkdir(const char *p){
 }
 
 static int session_paths(char *dir,size_t dn,char *cfg,size_t cn,char *tmp,size_t tn){
-    char mount[256],a[512],b[512];
-    if(session_find_storage(mount,sizeof mount)<0)return -1;
-    snprintf(a,sizeof a,"%s/%s",mount,SESSION_DIR_NAME);
-    snprintf(b,sizeof b,"%s/%s",a,SESSION_SUBDIR);
-    snprintf(dir,dn,"%s/%s",b,SESSION_NAME);
-    if(session_mkdir(a)<0 || session_mkdir(b)<0 || session_mkdir(dir)<0)return -1;
-    snprintf(cfg,cn,"%s/session.cfg",dir);
-    snprintf(tmp,tn,"%s/session.cfg.tmp",dir);
-    return 0;
+ char mount[256],mods[512],app[512],sessions[512];
+ if(session_find_storage(mount,sizeof mount)<0)return -1;
+
+ snprintf(mods,sizeof mods,"%s/MPC-Mods",mount);
+ snprintf(app,sizeof app,"%s/LoopPad",mods);
+ snprintf(sessions,sizeof sessions,"%s/Sessions",app);
+ snprintf(dir,dn,"%s/%s",sessions,SESSION_NAME);
+
+ if(session_mkdir(mods)<0 ||
+    session_mkdir(app)<0 ||
+    session_mkdir(sessions)<0 ||
+    session_mkdir(dir)<0) return -1;
+
+ snprintf(cfg,cn,"%s/session.cfg",dir);
+ snprintf(tmp,tn,"%s/session.cfg.tmp",dir);
+ return 0;
 }
 
 static int session_save_metadata(char *msg,size_t mn){
@@ -422,7 +429,7 @@ static void draw_session_page(struct ui *u){
     ui_clear(u,0x0b1018);ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
     ui_text(u,115,8,"SESSION v1A",0xffffff,1);
     for(int i=0;i<3;i++){int y=55+i*35;ui_box(u,30,y,260,26,(struct ui_paint){.fill_set=1,.fill=i==g_session_row?0x183b56:0x111827,.border_set=1,.border=i==g_session_row?0x22d3ee:0x263244,.border_px=i==g_session_row?2:1});ui_text(u,42,y+7,row[i],i==g_session_row?0x67e8f9:0xcbd5e1,1);}
-    ui_text(u,42,167,"LoopPad/Sessions/Default",0x94a3b8,1);
+    ui_text(u,42,167,"MPC-Mods/LoopPad/Sessions/Default",0x94a3b8,1);
     if(g_session_msg[0])ui_text(u,42,193,g_session_msg,g_session_msg_error?0xfca5a5:0x86efac,1);
     ui_text(u,15,226,"B1 BACK   ENCODER SELECT / PRESS RUN",0x94a3b8,1);
 }
