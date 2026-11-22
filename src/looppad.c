@@ -49,6 +49,13 @@ struct clip {
 };
 static struct clip clips[NCLIPS];
 
+/* Session v1C hand-off. 0=idle, 1=pending for audio thread, 2=committed. */
+static _Atomic int g_load_commit_state=0;
+static int32_t *g_load_new_audio[NCLIPS]={0};
+static int32_t *g_load_old_audio[NCLIPS]={0};
+static size_t g_load_frames[NCLIPS]={0};
+
+
 /* command: 1..4 pad press, 100+pad clear */
 enum quant_mode { Q_BAR, Q_BEAT, Q_OFF };
 enum countin_mode { CI_NEXT, CI_1BAR, CI_NOW };
@@ -216,9 +223,32 @@ static void process(const int32_t *in,int32_t *out,unsigned n){
     atomic_store(&g_clock,t);
 }
 
+static void session_commit_pending_load_audio_thread(void){
+ if(atomic_load(&g_load_commit_state)!=1)return;
+ uint64_t now=atomic_load(&g_clock);
+ int bpm=atomic_load(&g_bpm);
+ uint64_t bar_len=(uint64_t)(4.0*60.0*SR/bpm+0.5);
+ uint64_t start=((now/bar_len)+1)*bar_len;
+ for(int i=0;i<NCLIPS;i++){
+  g_load_old_audio[i]=clips[i].audio;
+  clips[i].audio=g_load_new_audio[i];
+  g_load_new_audio[i]=NULL;
+  atomic_store(&clips[i].state,g_load_frames[i]?QUEUED_PLAY:EMPTY);
+  atomic_store(&clips[i].len,g_load_frames[i]);
+  atomic_store(&clips[i].recpos,g_load_frames[i]);
+  /* Loaded loops join the master grid together at the next bar boundary. */
+  atomic_store(&clips[i].origin,g_load_frames[i]?start:0);
+  atomic_store(&clips[i].arm_at,0);
+  atomic_store(&clips[i].switch_at,g_load_frames[i]?start:0);
+  atomic_store(&clips[i].wave_ready,0);
+  memset(clips[i].wave,0,sizeof clips[i].wave);
+ }
+ atomic_store(&g_load_commit_state,2);
+}
+
 static void *audio_thread(void *x){(void)x;struct sched_param sp={.sched_priority=80};(void)pthread_setschedparam(pthread_self(),SCHED_FIFO,&sp);int32_t in[PERIOD*2],out[PERIOD*2]={0};
     for(int i=0;i<4;i++)(void)pcm_writei(g_pb,out,PERIOD);
-    while(atomic_load(&g_running)){if(pcm_readi(g_cap,in,PERIOD)<0){atomic_fetch_add(&g_xruns,1);pcm_prepare(g_cap);continue;}process(in,out,PERIOD);if(pcm_writei(g_pb,out,PERIOD)<0){atomic_fetch_add(&g_xruns,1);pcm_prepare(g_pb);}}return NULL;}
+    while(atomic_load(&g_running)){if(pcm_readi(g_cap,in,PERIOD)<0){atomic_fetch_add(&g_xruns,1);pcm_prepare(g_cap);continue;}session_commit_pending_load_audio_thread();process(in,out,PERIOD);if(pcm_writei(g_pb,out,PERIOD)<0){atomic_fetch_add(&g_xruns,1);pcm_prepare(g_pb);}}return NULL;}
 
 static int arm_beats_left(const struct clip *c) {
     uint64_t at=atomic_load(&c->arm_at),t=atomic_load(&g_clock);
@@ -415,6 +445,88 @@ static int session_parse_int(const char *line,const char *key,int *v){
     char *end=0;long x=strtol(line+k+1,&end,10);if(end==line+k+1)return -1;*v=(int)x;return 1;
 }
 
+static int session_read_frame_counts(const char *cfg,size_t frames[NCLIPS],char *msg,size_t mn){
+ for(int i=0;i<NCLIPS;i++)frames[i]=0;
+ FILE *f=fopen(cfg,"r");
+ if(!f){snprintf(msg,mn,"NO SESSION METADATA");return -1;}
+ char line[192];int fmt=-1,seen_fmt=0;
+ while(fgets(line,sizeof line,f)){
+  int v=0;
+  if(session_parse_int(line,"format_version",&v)==1){fmt=v;seen_fmt=1;continue;}
+  for(int i=0;i<NCLIPS;i++){
+   char key[32];snprintf(key,sizeof key,"pad%d.frames",i+1);
+   int r=session_parse_int(line,key,&v);
+   if(r==1){if(v<0){fclose(f);snprintf(msg,mn,"BAD PAD %d FRAMES",i+1);return -1;}frames[i]=(size_t)v;break;}
+   if(r<0){fclose(f);snprintf(msg,mn,"BAD METADATA");return -1;}
+  }
+ }
+ fclose(f);
+ if(!seen_fmt || fmt!=SESSION_FORMAT_VERSION){snprintf(msg,mn,"BAD SESSION FORMAT");return -1;}
+ return 0;
+}
+
+static int session_load_audio(char *msg,size_t mn){
+ char dir[512],cfg[576],tmpcfg[576];
+ if(session_paths(dir,sizeof dir,cfg,sizeof cfg,tmpcfg,sizeof tmpcfg)<0){snprintf(msg,mn,"NO WRITABLE SD/USB");return -1;}
+ size_t frames[NCLIPS]={0};
+ if(session_read_frame_counts(cfg,frames,msg,mn)<0)return -1;
+ int32_t *loaded[NCLIPS]={0};
+ int rc=-1;
+ for(int i=0;i<NCLIPS;i++){
+  if(!frames[i])continue;
+  if(frames[i]>MAX_FRAMES){snprintf(msg,mn,"PAD %d TOO LONG",i+1);goto fail;}
+  if(frames[i]>SIZE_MAX/(2*sizeof(int32_t))){snprintf(msg,mn,"PAD %d TOO LARGE",i+1);goto fail;}
+  size_t bytes=frames[i]*2*sizeof(int32_t);
+  char path[640];snprintf(path,sizeof path,"%s/pad%d.raw",dir,i+1);
+  struct stat st;
+  if(stat(path,&st)!=0 || st.st_size<0 || (uint64_t)st.st_size!=(uint64_t)bytes){snprintf(msg,mn,"PAD %d SIZE ERROR",i+1);goto fail;}
+  loaded[i]=calloc(MAX_FRAMES*2,sizeof(int32_t));
+  if(!loaded[i]){snprintf(msg,mn,"PAD %d NO MEMORY",i+1);goto fail;}
+  FILE *f=fopen(path,"rb");
+  if(!f){snprintf(msg,mn,"PAD %d OPEN FAILED",i+1);goto fail;}
+  size_t got=fread(loaded[i],1,bytes,f);int extra=fgetc(f);int ferr=ferror(f);fclose(f);
+  if(got!=bytes || extra!=EOF || ferr){snprintf(msg,mn,"PAD %d READ FAILED",i+1);goto fail;}
+ }
+ /* All files are valid and in full-capacity temporary buffers. Publish them,
+    then let the audio thread swap pointers between PCM blocks. */
+ if(atomic_load(&g_load_commit_state)!=0){snprintf(msg,mn,"LOAD BUSY");goto fail;}
+ for(int i=0;i<NCLIPS;i++){
+  if(!loaded[i]){
+   loaded[i]=calloc(MAX_FRAMES*2,sizeof(int32_t));
+   if(!loaded[i]){snprintf(msg,mn,"PAD %d NO MEMORY",i+1);goto fail;}
+  }
+  g_load_new_audio[i]=loaded[i];
+  loaded[i]=NULL;
+  g_load_frames[i]=frames[i];
+  g_load_old_audio[i]=NULL;
+ }
+ atomic_store(&g_load_commit_state,1);
+
+ /* A PCM period is 128 frames (~2.9 ms at 44.1 kHz). Wait only for the
+    block-boundary pointer swap, never for file I/O in the audio thread. */
+ int waits=0;
+ while(atomic_load(&g_load_commit_state)==1 && waits++<500)usleep(1000);
+ if(atomic_load(&g_load_commit_state)!=2){
+  /* Do not free published pointers: ownership may still be with audio thread. */
+  snprintf(msg,mn,"LOAD COMMIT TIMEOUT");
+  return -1;
+ }
+
+ /* Swap completed: old clip buffers are no longer referenced by process(). */
+ for(int i=0;i<NCLIPS;i++){
+  free(g_load_old_audio[i]);g_load_old_audio[i]=NULL;
+  g_load_frames[i]=0;
+ }
+ atomic_store(&g_load_commit_state,0);
+
+ /* Rebuild display waveforms outside the realtime thread. Audio is read-only now. */
+ for(int i=0;i<NCLIPS;i++)if(atomic_load(&clips[i].len))build_waveform(&clips[i]);
+ snprintf(msg,mn,"AUDIO LOADED");rc=0;
+fail:
+ for(int i=0;i<NCLIPS;i++)free(loaded[i]);
+ return rc;
+}
+
 static int session_load_metadata(char *msg,size_t mn){
     char dir[512],cfg[576],tmp[576];
     if(session_paths(dir,sizeof dir,cfg,sizeof cfg,tmp,sizeof tmp)<0){snprintf(msg,mn,"NO WRITABLE SD/USB");return -1;}
@@ -455,12 +567,12 @@ static int session_load_metadata(char *msg,size_t mn){
 }
 
 static void draw_session_page(struct ui *u){
-    static const char *row[]={"SAVE METADATA","LOAD METADATA","SAVE AUDIO","FOLDER"};
+    static const char *row[]={"SAVE METADATA","LOAD METADATA","SAVE AUDIO","LOAD AUDIO","FOLDER"};
     ui_clear(u,0x0b1018);ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
-    ui_text(u,115,8,"SESSION v1B",0xffffff,1);
-    for(int i=0;i<4;i++){int y=48+i*34;ui_box(u,30,y,260,26,(struct ui_paint){.fill_set=1,.fill=i==g_session_row?0x183b56:0x111827,.border_set=1,.border=i==g_session_row?0x22d3ee:0x263244,.border_px=i==g_session_row?2:1});ui_text(u,42,y+7,row[i],i==g_session_row?0x67e8f9:0xcbd5e1,1);}
-    ui_text(u,42,184,"MPC-Mods/LoopPad/Sessions/Default",0x94a3b8,1);
-    if(g_session_msg[0])ui_text(u,42,204,g_session_msg,g_session_msg_error?0xfca5a5:0x86efac,1);
+    ui_text(u,115,8,"SESSION v1C",0xffffff,1);
+    for(int i=0;i<5;i++){int y=42+i*32;ui_box(u,30,y,260,26,(struct ui_paint){.fill_set=1,.fill=i==g_session_row?0x183b56:0x111827,.border_set=1,.border=i==g_session_row?0x22d3ee:0x263244,.border_px=i==g_session_row?2:1});ui_text(u,42,y+7,row[i],i==g_session_row?0x67e8f9:0xcbd5e1,1);}
+    ui_text(u,42,192,"MPC-Mods/LoopPad/Sessions/Default",0x94a3b8,1);
+    if(g_session_msg[0])ui_text(u,42,211,g_session_msg,g_session_msg_error?0xfca5a5:0x86efac,1);
     ui_text(u,15,226,"B1 BACK   ENCODER SELECT / PRESS RUN",0x94a3b8,1);
 }
 
@@ -539,11 +651,12 @@ static int frame(struct ui *u,const struct input *in,void *x){
         if(g_session_open){
             if(in){
                 if(input_down(in,IN_B1)){g_session_open=0;return 0;}
-                if(in->encoder){g_session_row+=in->encoder;if(g_session_row<0)g_session_row=0;if(g_session_row>3)g_session_row=3;}
+                if(in->encoder){g_session_row+=in->encoder;if(g_session_row<0)g_session_row=0;if(g_session_row>4)g_session_row=4;}
                 if(input_down(in,IN_ENCODER)){
                     if(g_session_row==0)g_session_msg_error=session_save_metadata(g_session_msg,sizeof g_session_msg)<0;
                     else if(g_session_row==1)g_session_msg_error=session_load_metadata(g_session_msg,sizeof g_session_msg)<0;
                     else if(g_session_row==2){g_session_msg_error=session_save_audio(g_session_msg,sizeof g_session_msg)<0;}
+                    else if(g_session_row==3){g_session_msg_error=session_load_audio(g_session_msg,sizeof g_session_msg)<0;}
                     else {snprintf(g_session_msg,sizeof g_session_msg,"AUTO-DETECTED SD/USB");g_session_msg_error=0;}
                 }
             }
