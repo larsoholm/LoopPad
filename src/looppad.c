@@ -1,6 +1,9 @@
 /* LoopPad v0.6.2-dev - Settings UI development fixed-length loops for Akai MPC Sample */
 #define _GNU_SOURCE
 #include <math.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
@@ -255,6 +258,10 @@ static int g_settings_open=0;
 static int g_settings_row=0;
 static int g_settings_edit=0;
 static int g_about_open=0;
+static int g_session_open=0;
+static int g_session_row=0;
+static char g_session_msg[64]="";
+static int g_session_msg_error=0;
 static char g_settings_status[48]="";
 static int g_settings_status_ticks=0;
 
@@ -310,6 +317,116 @@ static void settings_change(int dir){
     }
 }
 
+
+#define SESSION_FORMAT_VERSION 1
+#define SESSION_DIR_NAME "LoopPad"
+#define SESSION_SUBDIR "Sessions"
+#define SESSION_NAME "Default"
+
+struct session_meta {
+    int format_version,bpm,layout,quantize,countin,input,click_level,default_bars;
+    int bars[NCLIPS],volume[NCLIPS];
+};
+
+static int session_find_storage(char *out,size_t n){
+    FILE *f=fopen("/proc/mounts","r");
+    if(!f)return -1;
+    char dev[256],mnt[256],type[64],opts[256];
+    int ok=-1;
+    while(fscanf(f,"%255s %255s %63s %255s %*d %*d",dev,mnt,type,opts)==4){
+        if((strncmp(mnt,"/media/",7)==0 || strncmp(mnt,"/mnt/",5)==0) && strstr(opts,"rw")){
+            snprintf(out,n,"%s",mnt);ok=0;break;
+        }
+    }
+    fclose(f);return ok;
+}
+
+static int session_mkdir(const char *p){
+    if(mkdir(p,0775)==0 || errno==EEXIST)return 0;
+    return -1;
+}
+
+static int session_paths(char *dir,size_t dn,char *cfg,size_t cn,char *tmp,size_t tn){
+    char mount[256],a[512],b[512];
+    if(session_find_storage(mount,sizeof mount)<0)return -1;
+    snprintf(a,sizeof a,"%s/%s",mount,SESSION_DIR_NAME);
+    snprintf(b,sizeof b,"%s/%s",a,SESSION_SUBDIR);
+    snprintf(dir,dn,"%s/%s",b,SESSION_NAME);
+    if(session_mkdir(a)<0 || session_mkdir(b)<0 || session_mkdir(dir)<0)return -1;
+    snprintf(cfg,cn,"%s/session.cfg",dir);
+    snprintf(tmp,tn,"%s/session.cfg.tmp",dir);
+    return 0;
+}
+
+static int session_save_metadata(char *msg,size_t mn){
+    char dir[512],cfg[576],tmp[576];
+    if(session_paths(dir,sizeof dir,cfg,sizeof cfg,tmp,sizeof tmp)<0){snprintf(msg,mn,"NO WRITABLE SD/USB");return -1;}
+    FILE *f=fopen(tmp,"w");
+    if(!f){snprintf(msg,mn,"SAVE OPEN FAILED");return -1;}
+    fprintf(f,"format_version=%d\ncreated_with=%s\n",SESSION_FORMAT_VERSION,LOOPPAD_VERSION);
+    fprintf(f,"bpm=%d\nlayout=%d\nquantize=%d\ncountin=%d\ninput=%d\nclick_level=%d\ndefault_bars=%d\n",
+        atomic_load(&g_bpm),atomic_load(&g_active_clips),atomic_load(&g_quant),atomic_load(&g_countin),
+        atomic_load(&g_input),atomic_load(&g_click_volume),atomic_load(&g_default_bars));
+    for(int i=0;i<NCLIPS;i++)fprintf(f,"pad%d.bars=%d\npad%d.volume=%d\n",i+1,atomic_load(&clips[i].bars),i+1,atomic_load(&clips[i].volume));
+    if(fflush(f)!=0 || fsync(fileno(f))!=0 || fclose(f)!=0){remove(tmp);snprintf(msg,mn,"SAVE WRITE FAILED");return -1;}
+    if(rename(tmp,cfg)!=0){remove(tmp);snprintf(msg,mn,"SAVE RENAME FAILED");return -1;}
+    snprintf(msg,mn,"METADATA SAVED");return 0;
+}
+
+static int session_parse_int(const char *line,const char *key,int *v){
+    size_t k=strlen(key);if(strncmp(line,key,k)||line[k]!='=')return 0;
+    char *end=0;long x=strtol(line+k+1,&end,10);if(end==line+k+1)return -1;*v=(int)x;return 1;
+}
+
+static int session_load_metadata(char *msg,size_t mn){
+    char dir[512],cfg[576],tmp[576];
+    if(session_paths(dir,sizeof dir,cfg,sizeof cfg,tmp,sizeof tmp)<0){snprintf(msg,mn,"NO WRITABLE SD/USB");return -1;}
+    FILE *f=fopen(cfg,"r");if(!f){snprintf(msg,mn,"NO SAVED METADATA");return -1;}
+    struct session_meta m={0};int seen=0;char line[256];
+    while(fgets(line,sizeof line,f)){
+        int r=0;
+        if((r=session_parse_int(line,"format_version",&m.format_version)))seen|=1<<0;
+        else if((r=session_parse_int(line,"bpm",&m.bpm)))seen|=1<<1;
+        else if((r=session_parse_int(line,"layout",&m.layout)))seen|=1<<2;
+        else if((r=session_parse_int(line,"quantize",&m.quantize)))seen|=1<<3;
+        else if((r=session_parse_int(line,"countin",&m.countin)))seen|=1<<4;
+        else if((r=session_parse_int(line,"input",&m.input)))seen|=1<<5;
+        else if((r=session_parse_int(line,"click_level",&m.click_level)))seen|=1<<6;
+        else if((r=session_parse_int(line,"default_bars",&m.default_bars)))seen|=1<<7;
+        else {
+            for(int i=0;i<NCLIPS;i++){
+                char k[32];snprintf(k,sizeof k,"pad%d.bars",i+1);if((r=session_parse_int(line,k,&m.bars[i]))){seen|=1<<(8+i);break;}
+                snprintf(k,sizeof k,"pad%d.volume",i+1);if((r=session_parse_int(line,k,&m.volume[i]))){seen|=1<<(16+i);break;}
+            }
+        }
+        if(r<0){fclose(f);snprintf(msg,mn,"INVALID METADATA");return -1;}
+    }
+    fclose(f);
+    if((seen&0x00ffffff)!=0x00ffffff || m.format_version!=SESSION_FORMAT_VERSION || m.bpm<40 || m.bpm>240 ||
+       (m.layout!=4&&m.layout!=8) || m.quantize<Q_BAR || m.quantize>Q_OFF || m.countin<CI_NEXT || m.countin>CI_NOW ||
+       m.input<0 || m.input>1 || m.click_level<0 || m.click_level>127 || m.default_bars<1 || m.default_bars>8){
+        snprintf(msg,mn,"METADATA VALIDATION FAILED");return -1;
+    }
+    for(int i=0;i<NCLIPS;i++)if(m.bars[i]<1||m.bars[i]>8||m.volume[i]<0||m.volume[i]>127){snprintf(msg,mn,"PAD METADATA INVALID");return -1;}
+    if(m.layout==4 && !settings_hidden_clips_empty()){snprintf(msg,mn,"CLEAR P5-P8 BEFORE LOAD");return -1;}
+    if(m.input!=atomic_load(&g_input) && setup_input_route(m.input)<0){snprintf(msg,mn,"INPUT ROUTE FAILED");return -1;}
+    atomic_store(&g_bpm,m.bpm);atomic_store(&g_active_clips,m.layout);atomic_store(&g_quant,m.quantize);
+    atomic_store(&g_countin,m.countin);atomic_store(&g_input,m.input);atomic_store(&g_click_volume,m.click_level);
+    atomic_store(&g_default_bars,m.default_bars);
+    for(int i=0;i<NCLIPS;i++){atomic_store(&clips[i].bars,m.bars[i]);atomic_store(&clips[i].volume,m.volume[i]);}
+    snprintf(msg,mn,"METADATA LOADED");return 0;
+}
+
+static void draw_session_page(struct ui *u){
+    static const char *row[]={"SAVE METADATA","LOAD METADATA","FOLDER"};
+    ui_clear(u,0x0b1018);ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
+    ui_text(u,115,8,"SESSION v1A",0xffffff,1);
+    for(int i=0;i<3;i++){int y=55+i*35;ui_box(u,30,y,260,26,(struct ui_paint){.fill_set=1,.fill=i==g_session_row?0x183b56:0x111827,.border_set=1,.border=i==g_session_row?0x22d3ee:0x263244,.border_px=i==g_session_row?2:1});ui_text(u,42,y+7,row[i],i==g_session_row?0x67e8f9:0xcbd5e1,1);}
+    ui_text(u,42,167,"LoopPad/Sessions/Default",0x94a3b8,1);
+    if(g_session_msg[0])ui_text(u,42,193,g_session_msg,g_session_msg_error?0xfca5a5:0x86efac,1);
+    ui_text(u,15,226,"B1 BACK   ENCODER SELECT / PRESS RUN",0x94a3b8,1);
+}
+
 static void draw_about_page(struct ui *u){
     ui_clear(u,0x0b1018);
     ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
@@ -326,13 +443,13 @@ static void draw_about_page(struct ui *u){
 }
 
 static void draw_settings_page(struct ui *u,const struct input *in){
-    static const char *names[]={"LOOP LAYOUT","BPM","QUANTIZE","COUNT-IN","INPUT","CLICK LEVEL","DEFAULT BARS","ABOUT"};
+    static const char *names[]={"LOOP LAYOUT","BPM","QUANTIZE","COUNT-IN","INPUT","CLICK LEVEL","DEFAULT BARS","SESSION","ABOUT"};
     char value[48];
     ui_clear(u,0x0b1018);
     ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
     ui_text(u,84,8,"LOOPPAD SETTINGS",0xffffff,1);
-    for(int i=0;i<8;i++){
-        int y=34+i*21;
+    for(int i=0;i<9;i++){
+        int y=32+i*19;
         uint32_t fill=i==g_settings_row?0x183b56:0x111827;
         uint32_t border=i==g_settings_row?0x22d3ee:0x263244;
         ui_box(u,16,y,288,20,(struct ui_paint){.fill_set=1,.fill=fill,.border_set=1,.border=border,.border_px=i==g_settings_row?2:1});
@@ -382,6 +499,18 @@ static int frame(struct ui *u,const struct input *in,void *x){
         g_settings_status[0]='\0';g_settings_status_ticks=0;
     }
     if(g_settings_open){
+        if(g_session_open){
+            if(in){
+                if(input_down(in,IN_B1)){g_session_open=0;return 0;}
+                if(in->encoder){g_session_row+=in->encoder;if(g_session_row<0)g_session_row=0;if(g_session_row>2)g_session_row=2;}
+                if(input_down(in,IN_ENCODER)){
+                    if(g_session_row==0)g_session_msg_error=session_save_metadata(g_session_msg,sizeof g_session_msg)<0;
+                    else if(g_session_row==1)g_session_msg_error=session_load_metadata(g_session_msg,sizeof g_session_msg)<0;
+                    else {snprintf(g_session_msg,sizeof g_session_msg,"AUTO-DETECTED SD/USB");g_session_msg_error=0;}
+                }
+            }
+            draw_session_page(u);return 0;
+        }
         if(g_about_open){
             if(in && input_down(in,IN_B1))g_about_open=0;
             draw_about_page(u);
@@ -393,7 +522,8 @@ static int frame(struct ui *u,const struct input *in,void *x){
                 else {g_settings_open=0;return 0;}
             }
             if(input_down(in,IN_ENCODER)){
-                if(g_settings_row==7){g_about_open=1;g_settings_edit=0;}
+                if(g_settings_row==7){g_session_open=1;g_settings_edit=0;g_session_msg[0]='\0';}
+                else if(g_settings_row==8){g_about_open=1;g_settings_edit=0;}
                 else g_settings_edit=!g_settings_edit;
             }
             if(in->encoder){
@@ -403,7 +533,7 @@ static int frame(struct ui *u,const struct input *in,void *x){
                     while(n--) settings_change(step);
                 } else {
                     g_settings_row+=in->encoder;
-                    if(g_settings_row<0)g_settings_row=0;if(g_settings_row>7)g_settings_row=7;
+                    if(g_settings_row<0)g_settings_row=0;if(g_settings_row>8)g_settings_row=8;
                 }
             }
             /* Keep +/- as an optional shortcut. */
