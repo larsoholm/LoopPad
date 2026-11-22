@@ -345,6 +345,11 @@ static int frame(struct ui *u,const struct input *in,void *x){
         ui_text(u, 122, 218, LOOPPAD_VERSION, 0xb8c2cc, 1);
         return 0;
     }
+    /* Main Volume is global and must work on every interactive screen. */
+    if(in){
+        atomic_store(&g_volume,in->main_moved?in->main:in->main_pos);
+    }
+
     if(in && in->shift && input_down(in,IN_SAMPLE_SELECT)){
         g_settings_open=!g_settings_open;
         g_settings_status[0]='\0';g_settings_status_ticks=0;
@@ -372,7 +377,7 @@ static int frame(struct ui *u,const struct input *in,void *x){
     if(clear_ticks>0 && --clear_ticks==0) clear_pad=-1;
     if(layout_ticks>0) --layout_ticks;
     if(in){
-        atomic_store(&g_volume,in->main_moved?in->main:in->main_pos);
+
         if(in->knob_moved[0]){
             if(in->shift) atomic_store(&g_click_volume,in->knob[0]);
             else if(atomic_load(&g_mode)==MODE_SETUP && !any_recording() && atomic_load(&clips[selected].state)==EMPTY){
