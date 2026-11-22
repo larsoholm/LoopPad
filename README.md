@@ -4,6 +4,16 @@
 
 LoopPad runs directly on the MPC Sample and turns the hardware into a pad-driven live looping instrument using the built-in display, RGB pads, microphone/rear inputs, knobs, fader, and hardware level meters.
 
+<p align="center">
+  <img src="assets/looppad_mpc.jpg"
+       alt="LoopPad running on an Akai MPC Sample in 8-loop mode"
+       width="600">
+</p>
+
+<p align="center">
+  <em>LoopPad v0.6.1-alpha running synchronized loops on MPC Sample hardware.</em>
+</p>
+
 > **Status:** Alpha-quality community software. The current development release is **v0.6.1-alpha**.
 
 ## What LoopPad does
@@ -85,7 +95,7 @@ LoopPad uses an eight-clip engine underneath two views.
 - Compact 2×4 clip overview
 - P5–P8 appear on the upper display row
 - P1–P4 appear on the lower display row, matching the physical pad arrangement
-- Pads 9–16 are currently reserved for future performance functions
+- Pads 9–16 are reserved for future performance functions
 
 Switching from 4 to 8 loops is allowed in SETUP.
 
@@ -137,11 +147,9 @@ mpc-ui-toolkit
 
 The currently supported way to install and launch LoopPad is **MPC Boot Thingy**.
 
-Typical installation flow:
-
 1. Install MPC Boot Thingy on the MPC Sample.
 2. Connect the MPC Sample to the computer over USB.
-3. Open the MPC Boot Thingy web interface at `http://192.168.155.1:8080`.
+3. Open `http://192.168.155.1:8080`.
 4. Choose **Install App**.
 5. Select the LoopPad AArch64 binary.
 6. Leave **Args** blank.
@@ -150,15 +158,13 @@ Typical installation flow:
 
 > **Important: no standalone exit / power-off yet**
 >
-> LoopPad currently has **no implemented hardware exit or power-off function of its own**. The MPC Sample physical power button is not currently handled directly by LoopPad.
+> LoopPad currently has **no implemented hardware exit or power-off function of its own**.
 >
 > MPC Boot Thingy is therefore currently required for the supported recovery/reboot workflow.
 >
-> **Do not configure LoopPad as the default boot application while this limitation remains. Keep Stock as the default.**
+> **Do not configure LoopPad as the default boot application. Keep Stock as Default.**
 
 A clean in-app exit/shutdown path is planned before a stable v1.0 release.
-
-A standalone SD-card/autorun installation may be considered later, once safe exit and recovery are implemented.
 
 ## Current development status
 
@@ -178,7 +184,17 @@ LoopPad v0.6.1-alpha has been hardware-tested with:
 - Updated MPC pad LED handling
 - **XRUN 0** during the current eight-loop stress test
 
-The current development focus is stabilizing this baseline before adding larger features.
+## Screenshots
+
+### Startup splash
+
+<p align="center">
+  <img src="assets/looppad_splash.png"
+       alt="LoopPad startup splash screen"
+       width="600">
+</p>
+
+The splash screen is embedded directly in the LoopPad binary. The application version is rendered separately at runtime, allowing the same artwork to be reused across future releases.
 
 ## Roadmap
 
@@ -186,14 +202,14 @@ The current development focus is stabilizing this baseline before adding larger 
 
 - Unified Settings UI
 - Overdub existing loops without consuming another pad
-- Physical Undo support with memory-safe Undo history
-- Save and load complete LoopPad sessions from SD card
-- Solo and mute workflow for larger performances
+- Physical Undo with memory-safe Undo history
+- Save/load complete LoopPad sessions from SD card
+- Solo and mute workflow
 - Clean Exit / Shutdown / recovery path
 
 ### Performance controls
 
-Pads 9–16 may later be used for performance functions such as:
+Pads 9–16 may later be used for:
 
 - Stop All
 - Play All
@@ -212,22 +228,19 @@ Pads 9–16 may later be used for performance functions such as:
 - Half-speed playback
 - Session/project management
 - Export recorded material for continued work in Stock MPC
-- Packaged Boot Thingy installer
 
 ## Development documentation
 
-Detailed development notes covering the architecture, control mapping, audio configuration, version history, known limitations, and roadmap are maintained in the [`docs/`](docs/) directory.
+Detailed development notes are maintained in the [docs](docs/) directory.
 
 ## Safety and disclaimer
 
 LoopPad is an unofficial community project. It is **not affiliated with, sponsored by, or endorsed by Akai Professional**.
 
-LoopPad is experimental software that runs directly on the MPC Sample hardware.
-
 Before testing:
 
 - Back up the SD card and important MPC projects.
-- Keep the stock MPC application as the default boot option.
+- Keep Stock as the default boot application.
 - Do not distribute private SSH keys or personalized autorun data.
 - Use experimental builds at your own risk.
 
@@ -245,11 +258,15 @@ Copyright (c) 2026 Lars Öholm.
 
 See [LICENSE](LICENSE) for the full terms.
 
-LoopPad uses third-party components with separate license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTYributed as a precompiled AArch64 binary for the MPC Sample.
+LoopPad uses third-party components with separate license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
 
-`mpc-ui-toolkit` is released under the **CC0 1.0 Universal** public domain dedication. TinyALSA is distributed under its own permissive redistribution terms.
+### Binary releases
 
-Required third-party copyright notices and redistribution conditions are documented in THIRD_PARTY_NOTICES.md.
+LoopPad may be distributed as a precompiled AArch64 binary for the MPC Sample.
+
+`mpc-ui-toolkit` is released under **CC0 1.0 Universal**. TinyALSA is distributed under its own permissive redistribution terms.
+
+Required third-party notices are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgements
 
@@ -257,6 +274,6 @@ LoopPad builds on community work around the MPC Sample, particularly:
 
 - [mpc-ui-toolkit](https://github.com/garrettjwilke/mpc-ui-toolkit)
 - [mpc-boot-thingy](https://github.com/garrettjwilke/mpc-boot-thingy)
-- https://github.com/tinyalsa/tinyalsa
+- [TinyALSA](https://github.com/tinyalsa/tinyalsa)
 
 Thanks to Garrett Wilke and the wider MPC Sample community for documenting and exploring the platform.
