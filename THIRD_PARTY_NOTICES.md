@@ -19,13 +19,17 @@ Project: https://github.com/tinyalsa/tinyalsa
 
 ## mpc-ui-toolkit
 
-LoopPad uses `mpc-ui-toolkit` source code at build time for the MPC Sample display, control surface, pads, LEDs, input handling, and application loop.
+LoopPad uses `mpc-ui-toolkit` for the MPC Sample display, control surface,
+pads, LEDs, input handling, widgets, file browser, and application framework.
 
-Project: https://github.com/garrettjwilke/mpc-ui-toolkit
+`mpc-ui-toolkit` is released under the **CC0 1.0 Universal** public domain
+dedication.
 
-**License status:** the local `mpc-ui-toolkit` checkout inspected during LoopPad development did not contain a top-level `LICENSE` file. Until the author or repository provides explicit redistribution/license terms, this notice does **not** assert permission to redistribute `mpc-ui-toolkit` source or binaries incorporating that code.
+Project:
+https://github.com/garrettjwilke/mpc-ui-toolkit
 
-For that reason, LoopPad's source repository should continue to reference `mpc-ui-toolkit` as an external dependency rather than vendoring it. Public redistribution of precompiled LoopPad binaries that incorporate `mpc-ui-toolkit` should wait until redistribution permission is clarified.
+License:
+https://creativecommons.org/publicdomain/zero/1.0/
 
 ## mpc-boot-thingy
 
