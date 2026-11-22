@@ -365,6 +365,36 @@ static int session_paths(char *dir,size_t dn,char *cfg,size_t cn,char *tmp,size_
  return 0;
 }
 
+static int session_write_atomic(const char *path,const void *data,size_t bytes){
+ char tmp[704];
+ snprintf(tmp,sizeof tmp,"%s.tmp",path);
+ FILE *f=fopen(tmp,"wb");
+ if(!f)return -1;
+ if(bytes && fwrite(data,1,bytes,f)!=bytes){fclose(f);remove(tmp);return -1;}
+ if(fflush(f)!=0){fclose(f);remove(tmp);return -1;}
+ if(fsync(fileno(f))!=0){fclose(f);remove(tmp);return -1;}
+ if(fclose(f)!=0){remove(tmp);return -1;}
+ if(rename(tmp,path)!=0){remove(tmp);return -1;}
+ return 0;
+}
+
+static int session_save_audio(char *msg,size_t mn){
+ char dir[512],cfg[576],tmpcfg[576];
+ if(session_paths(dir,sizeof dir,cfg,sizeof cfg,tmpcfg,sizeof tmpcfg)<0){snprintf(msg,mn,"NO WRITABLE SD/USB");return -1;}
+ for(int i=0;i<NCLIPS;i++){
+  size_t frames=(size_t)atomic_load(&clips[i].len);
+  if(!frames)continue;
+  if(!clips[i].audio){snprintf(msg,mn,"PAD %d NO BUFFER",i+1);return -1;}
+  if(frames > SIZE_MAX/(2*sizeof(int32_t))){snprintf(msg,mn,"PAD %d TOO LARGE",i+1);return -1;}
+  char path[640];
+  snprintf(path,sizeof path,"%s/pad%d.raw",dir,i+1);
+  size_t bytes=frames*2*sizeof(int32_t);
+  if(session_write_atomic(path,clips[i].audio,bytes)<0){snprintf(msg,mn,"PAD %d SAVE FAILED",i+1);return -1;}
+ }
+ snprintf(msg,mn,"AUDIO SAVED");
+ return 0;
+}
+
 static int session_save_metadata(char *msg,size_t mn){
     char dir[512],cfg[576],tmp[576];
     if(session_paths(dir,sizeof dir,cfg,sizeof cfg,tmp,sizeof tmp)<0){snprintf(msg,mn,"NO WRITABLE SD/USB");return -1;}
@@ -374,7 +404,7 @@ static int session_save_metadata(char *msg,size_t mn){
     fprintf(f,"bpm=%d\nlayout=%d\nquantize=%d\ncountin=%d\ninput=%d\nclick_level=%d\ndefault_bars=%d\n",
         atomic_load(&g_bpm),atomic_load(&g_active_clips),atomic_load(&g_quant),atomic_load(&g_countin),
         atomic_load(&g_input),atomic_load(&g_click_volume),atomic_load(&g_default_bars));
-    for(int i=0;i<NCLIPS;i++)fprintf(f,"pad%d.bars=%d\npad%d.volume=%d\n",i+1,atomic_load(&clips[i].bars),i+1,atomic_load(&clips[i].volume));
+    for(int i=0;i<NCLIPS;i++)fprintf(f,"pad%d.bars=%d\npad%d.volume=%d\npad%d.frames=%zu\n",i+1,atomic_load(&clips[i].bars),i+1,atomic_load(&clips[i].volume),i+1,(size_t)atomic_load(&clips[i].len));
     if(fflush(f)!=0 || fsync(fileno(f))!=0 || fclose(f)!=0){remove(tmp);snprintf(msg,mn,"SAVE WRITE FAILED");return -1;}
     if(rename(tmp,cfg)!=0){remove(tmp);snprintf(msg,mn,"SAVE RENAME FAILED");return -1;}
     snprintf(msg,mn,"METADATA SAVED");return 0;
@@ -425,12 +455,12 @@ static int session_load_metadata(char *msg,size_t mn){
 }
 
 static void draw_session_page(struct ui *u){
-    static const char *row[]={"SAVE METADATA","LOAD METADATA","FOLDER"};
+    static const char *row[]={"SAVE METADATA","LOAD METADATA","SAVE AUDIO","FOLDER"};
     ui_clear(u,0x0b1018);ui_box(u,0,0,UI_W,30,(struct ui_paint){.fill_set=1,.fill=0x123047});
-    ui_text(u,115,8,"SESSION v1A",0xffffff,1);
-    for(int i=0;i<3;i++){int y=55+i*35;ui_box(u,30,y,260,26,(struct ui_paint){.fill_set=1,.fill=i==g_session_row?0x183b56:0x111827,.border_set=1,.border=i==g_session_row?0x22d3ee:0x263244,.border_px=i==g_session_row?2:1});ui_text(u,42,y+7,row[i],i==g_session_row?0x67e8f9:0xcbd5e1,1);}
-    ui_text(u,42,167,"MPC-Mods/LoopPad/Sessions/Default",0x94a3b8,1);
-    if(g_session_msg[0])ui_text(u,42,193,g_session_msg,g_session_msg_error?0xfca5a5:0x86efac,1);
+    ui_text(u,115,8,"SESSION v1B",0xffffff,1);
+    for(int i=0;i<4;i++){int y=48+i*34;ui_box(u,30,y,260,26,(struct ui_paint){.fill_set=1,.fill=i==g_session_row?0x183b56:0x111827,.border_set=1,.border=i==g_session_row?0x22d3ee:0x263244,.border_px=i==g_session_row?2:1});ui_text(u,42,y+7,row[i],i==g_session_row?0x67e8f9:0xcbd5e1,1);}
+    ui_text(u,42,184,"MPC-Mods/LoopPad/Sessions/Default",0x94a3b8,1);
+    if(g_session_msg[0])ui_text(u,42,204,g_session_msg,g_session_msg_error?0xfca5a5:0x86efac,1);
     ui_text(u,15,226,"B1 BACK   ENCODER SELECT / PRESS RUN",0x94a3b8,1);
 }
 
@@ -509,10 +539,11 @@ static int frame(struct ui *u,const struct input *in,void *x){
         if(g_session_open){
             if(in){
                 if(input_down(in,IN_B1)){g_session_open=0;return 0;}
-                if(in->encoder){g_session_row+=in->encoder;if(g_session_row<0)g_session_row=0;if(g_session_row>2)g_session_row=2;}
+                if(in->encoder){g_session_row+=in->encoder;if(g_session_row<0)g_session_row=0;if(g_session_row>3)g_session_row=3;}
                 if(input_down(in,IN_ENCODER)){
                     if(g_session_row==0)g_session_msg_error=session_save_metadata(g_session_msg,sizeof g_session_msg)<0;
                     else if(g_session_row==1)g_session_msg_error=session_load_metadata(g_session_msg,sizeof g_session_msg)<0;
+                    else if(g_session_row==2){g_session_msg_error=session_save_audio(g_session_msg,sizeof g_session_msg)<0;}
                     else {snprintf(g_session_msg,sizeof g_session_msg,"AUTO-DETECTED SD/USB");g_session_msg_error=0;}
                 }
             }
